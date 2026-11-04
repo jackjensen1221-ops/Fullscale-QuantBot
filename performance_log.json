@@ -4,5 +4,11 @@
         "equity": 1000.0,
         "signals_processed": 3,
         "orders_executed": 3
+    },
+    {
+        "timestamp": "2026-11-04 23:47:40.857648",
+        "equity": 1000.0,
+        "signals_processed": 5,
+        "orders_executed": 5
     }
 ]

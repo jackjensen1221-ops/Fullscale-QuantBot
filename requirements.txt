@@ -1,0 +1,8 @@
+alpaca-py
+yfinance
+pandas
+numpy
+scipy
+python-dotenv
+lxml
+html5lib

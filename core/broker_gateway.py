@@ -11,7 +11,8 @@ class BrokerGateway:
             or os.getenv("ALPACA_API_KEY")
         )
         self.secret_key = (
-            os.getenv("APCA_SECRET_KEY") 
+            os.getenv("APCA_API_SECRET_KEY") 
+            or os.getenv("APCA_SECRET_KEY") 
             or os.getenv("ALPACA_SECRET_KEY") 
             or os.getenv("ALPACA_SECRET")
         )

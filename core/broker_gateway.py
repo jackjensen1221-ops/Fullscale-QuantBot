@@ -25,32 +25,62 @@ class BrokerGateway:
             print(f"❌ [Broker Error]: Failed to fetch account status: {e}")
             return 0.0, 0.0
 
+    def get_open_positions(self):
+        """Returns a mapping of active positions and their sides."""
+        try:
+            positions = self.client.get_all_positions()
+            # Returns dictionary like {'MSFT': 'long', 'TSLA': 'short'}
+            return {p.symbol: p.side for p in positions}
+        except Exception as e:
+            print(f"⚠️ [Broker Warning]: Could not fetch active positions: {e}")
+            return {}
+
     def execute_orders(self, orders):
-        print(f"🚀 [Broker Gateway]: Executing {len(orders)} order(s) with automated bracket risk guards...")
-        
+        print(f"🚀 [Broker Gateway]: Executing {len(orders)} order(s) with full long/short support...")
+        active_positions = self.get_open_positions()
+
         for order in orders:
             symbol = order['symbol']
-            side = OrderSide.BUY if order['signal'] == 'BUY' else OrderSide.SELL
+            signal_side = order['signal'] # 'BUY' or 'SELL'
             allocation = order.get('allocation', 100.0)
-            
+            estimated_price = order.get('current_price', 100.0)
+
             try:
-                # Estimate current approximate price from allocation or default baseline 
-                # (In production, pass current live price from your data frame)
-                estimated_price = order.get('current_price', 100.0)
-                
-                # Define automated risk guard parameters (e.g., 3% Take Profit, 1.5% Stop Loss)
-                if side == OrderSide.BUY:
+                if signal_side == 'BUY':
+                    side = OrderSide.BUY
+                    # Long Bracket Math: TP above price, SL below price
                     tp_price = round(estimated_price * 1.03, 2)
                     sl_price = round(estimated_price * 0.985, 2)
+                    action_label = "LONG BUY"
+                
+                elif signal_side == 'SELL':
+                    # Check if we are holding a long position to close, or opening a short position
+                    if symbol in active_positions and active_positions[symbol] == 'long':
+                        # If we own it, a SELL signal means closing the long position (standard market order)
+                        print(f"   🔄 [Position Close]: Closing existing long position in {symbol}.")
+                        req = MarketOrderRequest(
+                            symbol=symbol,
+                            notional=allocation,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY
+                        )
+                        submitted = self.client.submit_order(req)
+                        print(f"   ✅ [Close Order Submitted]: SELL {symbol} | Notional: ${allocation:,.2f}")
+                        continue
+                    else:
+                        # Otherwise, open a new SHORT position
+                        side = OrderSide.SELL
+                        # Short Bracket Math: TP below price, SL above price
+                        tp_price = round(estimated_price * 0.97, 2)
+                        sl_price = round(estimated_price * 1.015, 2)
+                        action_label = "SHORT SELL"
                 else:
-                    tp_price = round(estimated_price * 0.97, 2)
-                    sl_price = round(estimated_price * 1.015, 2)
+                    continue
 
                 # Configure server-side bracket legs
                 take_profit_req = TakeProfitRequest(limit_price=tp_price)
                 stop_loss_req = StopLossRequest(stop_price=sl_price)
 
-                # Submit composite market order with attached bracket protection
                 bracket_req = MarketOrderRequest(
                     symbol=symbol,
                     notional=allocation,
@@ -62,8 +92,8 @@ class BrokerGateway:
                 )
 
                 submitted = self.client.submit_order(bracket_req)
-                print(f"   ✅ [Protected Order Submitted]: {side.value} {symbol} | Notional: ${allocation:,.2f}")
+                print(f"   ✅ [{action_label} Submitted]: {symbol} | Notional: ${allocation:,.2f}")
                 print(f"      └─ Guard Rails Set -> Take-Profit: ${tp_price} | Stop-Loss: ${sl_price}")
 
             except Exception as e:
-                print(f"   ❌ [Order Rejection] {symbol}: {e}")
+                print(f"   ❌ [Order Rejection] {symbol} ({signal_side}): {e}")

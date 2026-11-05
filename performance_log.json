@@ -480,5 +480,49 @@
                 "allocation": 14.96775
             }
         ]
+    },
+    {
+        "timestamp": "2026-11-05T17:57:45.950286",
+        "equity": 100000.0,
+        "buying_power": 400000.0,
+        "signals_generated": 5,
+        "orders_executed": 5,
+        "executed_orders": [
+            {
+                "symbol": "AMZN",
+                "signal": "BUY",
+                "strategy": "MarketNeutral-Factor",
+                "target_weight": 0.02,
+                "allocation": 2000.0
+            },
+            {
+                "symbol": "GOOGL",
+                "signal": "SELL",
+                "strategy": "MarketNeutral-Factor",
+                "target_weight": 0.02,
+                "allocation": 2000.0
+            },
+            {
+                "symbol": "TLT",
+                "signal": "BUY",
+                "strategy": "GlobalMacro-Rates",
+                "target_weight": 0.025,
+                "allocation": 2500.0
+            },
+            {
+                "symbol": "SPY",
+                "signal": "SELL",
+                "strategy": "OptionsVol-MeanReversion",
+                "target_weight": 0.015,
+                "allocation": 1500.0
+            },
+            {
+                "symbol": "QQQ",
+                "signal": "SELL",
+                "strategy": "OptionsVol-MeanReversion",
+                "target_weight": 0.015,
+                "allocation": 1500.0
+            }
+        ]
     }
 ]

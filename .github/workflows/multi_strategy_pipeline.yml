@@ -1,24 +1,20 @@
-name: QuantFund Multi-Strategy Engine
+name: Fullscale QuantBot Pipeline
 
 on:
   schedule:
-    # 1. Intraday Execution: Runs every hour during US market hours (14:00 - 21:00 UTC, Mon-Fri)
-    - cron: '30 14-21 * * 1-5'
-    # 2. Nightly Research Lab: Runs every weekday at 2:00 AM UTC (9:00 PM EST)
-    - cron: '0 2 * * 1-5'
-  workflow_dispatch:
+    # Runs Monday through Friday at market open (9:30 AM EST / 14:30 UTC)
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab
 
 jobs:
-  run-fund-pipeline:
+  run-trading-bot:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: Check out repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -27,21 +23,12 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Execute Master Orchestrator
+      - name: Run Core Trading Engine
         env:
           APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
           APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
-          APCA_SECRET_KEY: ${{ secrets.APCA_SECRET_KEY }}
-          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: python core_engine.py
-
-      - name: Auto-Commit Fund Performance Logs & Audit Trails
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          git config --global user.name "QuantFund Bot"
-          git config --global user.email "bot@quantfund.local"
-          git add performance_log.json || true
-          git commit -m "📊 Multi-Strategy Fund Audit & Performance Snapshot [skip ci]" || echo "No changes to commit"
-          git push || echo "No push required"
+          python core_engine.py

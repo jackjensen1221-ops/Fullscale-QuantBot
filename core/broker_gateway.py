@@ -30,7 +30,7 @@ class BrokerGateway:
             return 0.0, 0.0
 
     def get_open_positions(self):
-        """Returns a mapping of active positions and their sides."""
+        """Returns a mapping of active positions and their sides ('long' or 'short')."""
         try:
             positions = self.client.get_all_positions()
             return {p.symbol: p.side for p in positions}
@@ -43,7 +43,6 @@ class BrokerGateway:
         try:
             request_params = StockLatestQuoteRequest(symbol_or_symbols=symbol)
             quote = self.data_client.get_stock_latest_quote(request_params)
-            # Use Ask price for buys, Bid price for sells; fallback to ask price
             ask_price = quote[symbol].ask_price
             bid_price = quote[symbol].bid_price
             if ask_price and ask_price > 0:
@@ -51,20 +50,23 @@ class BrokerGateway:
             elif bid_price and bid_price > 0:
                 return float(bid_price)
         except Exception as e:
-            print(f"⚠️ [Price Fetch Warning] {symbol}: {e}. Falling back to order context price.")
+            print(f"⚠️ [Price Fetch Warning] {symbol}: {e}. Falling back to default price.")
         return None
 
     def execute_orders(self, orders):
-        print(f"🚀 [Broker Gateway]: Executing {len(orders)} order(s) with live price quotes...")
+        print(f"🚀 [Broker Gateway]: Executing {len(orders)} order(s) with live prices & whole-share brackets...")
         active_positions = self.get_open_positions()
 
         for order in orders:
             symbol = order['symbol']
             signal_side = order['signal'] # 'BUY' or 'SELL'
-            allocation = round(float(order.get('allocation', 100.0)), 2) # FIX: Force notional allocation to strictly 2 decimal places
+            allocation = float(order.get('allocation', 100.0))
 
             # Fetch real live market price from Alpaca Data API
             live_price = self.get_live_price(symbol) or order.get('current_price', 100.0)
+
+            # Convert dollar allocation into whole share quantities (minimum 1 share) required for brackets
+            share_qty = max(1, round(allocation / live_price))
 
             try:
                 if signal_side == 'BUY':
@@ -75,16 +77,17 @@ class BrokerGateway:
                     action_label = "LONG BUY"
                 
                 elif signal_side == 'SELL':
+                    # If we currently hold a long position, close it cleanly first
                     if symbol in active_positions and active_positions[symbol] == 'long':
                         print(f"   🔄 [Position Close]: Closing existing long position in {symbol}.")
                         req = MarketOrderRequest(
                             symbol=symbol,
-                            notional=allocation,
+                            qty=share_qty,
                             side=OrderSide.SELL,
                             time_in_force=TimeInForce.DAY
                         )
                         submitted = self.client.submit_order(req)
-                        print(f"   ✅ [Close Order Submitted]: SELL {symbol} | Notional: ${allocation:,.2f}")
+                        print(f"   ✅ [Close Order Submitted]: SELL {symbol} | Qty: {share_qty}")
                         continue
                     else:
                         side = OrderSide.SELL
@@ -95,10 +98,10 @@ class BrokerGateway:
                 else:
                     continue
 
-                # Server-side bracket request with accurate price targets
+                # Server-side bracket request using whole share 'qty' to prevent fractional rejections
                 bracket_req = MarketOrderRequest(
                     symbol=symbol,
-                    notional=allocation,
+                    qty=share_qty,
                     side=side,
                     time_in_force=TimeInForce.DAY,
                     order_class=OrderClass.BRACKET,
@@ -107,7 +110,7 @@ class BrokerGateway:
                 )
 
                 submitted = self.client.submit_order(bracket_req)
-                print(f"   ✅ [{action_label} Submitted]: {symbol} @ ~${live_price:.2f} | Notional: ${allocation:,.2f}")
+                print(f"   ✅ [{action_label} Submitted]: {symbol} | Qty: {share_qty} @ ~${live_price:.2f}")
                 print(f"      └─ Guard Rails -> Take-Profit: ${tp_price} | Stop-Loss: ${sl_price}")
 
             except Exception as e:

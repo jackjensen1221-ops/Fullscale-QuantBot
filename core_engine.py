@@ -1,107 +1,83 @@
-import json
 import os
+import time
+import logging
+import requests
 from datetime import datetime
-from core.broker_gateway import BrokerGateway
-from core.risk_manager import RiskManager
-from core.execution_guard import ExecutionGuard
-from core.research_engine import ResearchEngine
-from core.journal_logger import JournalLogger  # <-- Import Journal Logger
+from dotenv import load_dotenv
 
-# Import all strategy desks
-from strategies import stat_arb, market_neutral, global_macro, event_driven, options_vol
+# Import your custom modules based on your folder structure
+from strategies.market_scanner import FullMarketScanner
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
-def main():
-    print("==================================================")
-    print("[QuantFund HQ]: Initializing Multi-Strategy Execution & Research Cycle...")
-    print(f"Timestamp: {datetime.utcnow().isoformat()} UTC")
-    print("==================================================")
+load_dotenv()
 
-    # 1. Initialize Modules
-    research = ResearchEngine()
-    broker = BrokerGateway()
-    risk_mgr = RiskManager(max_gross_exposure=1.0, max_single_weight=0.03)
-    exec_guard = ExecutionGuard(max_adv_pct=0.02)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("trading_bot.log"), logging.StreamHandler()]
+)
+logger = logging.getLogger("CoreEngine")
 
-    # 2. Run Daily Research Briefing
-    intel = research.run_daily_research()
+class NotificationManager:
+    """Handles real-time Discord webhook notifications."""
+    def __init__(self):
+        self.webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
 
-    # Fetch Account Status
-    equity, buying_power = broker.get_account_status()
-    print(f"💰 [Account Status]: Equity: ${equity:,.2f} | Buying Power: ${buying_power:,.2f}")
-
-    # 3. Aggregate Signals Across Desks
-    print("\n🔍 [Strategy Execution]: Polling active alpha desks...")
-    raw_signals = []
-    
-    desks = [
-        ("StatArb-Pairs", stat_arb),
-        ("MarketNeutral-Factor", market_neutral),
-        ("GlobalMacro-Rates", global_macro),
-        ("EventDriven-Catalyst", event_driven),
-        ("OptionsVol-Regime", options_vol)
-    ]
-
-    for desk_name, desk_module in desks:
+    def send_alert(self, title: str, message: str, level: str = "INFO"):
+        if not self.webhook_url:
+            return
+        color_map = {"SUCCESS": 3066993, "ERROR": 15158332, "WARNING": 16776960, "INFO": 3447003}
+        payload = {
+            "embeds": [{
+                "title": f"[{level.upper()}] {title}",
+                "description": message,
+                "color": color_map.get(level.upper(), 3447003),
+                "timestamp": datetime.utcnow().isoformat()
+            }]
+        }
         try:
-            signals = desk_module.generate_signals()
-            if signals:
-                raw_signals.extend(signals)
+            requests.post(self.webhook_url, json=payload, timeout=5)
         except Exception as e:
-            print(f"   ❌ Error executing {desk_name}: {e}")
+            logger.error(f"Failed to send webhook alert: {e}")
 
-    print(f"   📊 Total raw signals collected: {len(raw_signals)}")
-
-    # 4. Risk & Covariance Optimization
-    validated_orders = risk_mgr.evaluate_portfolio(raw_signals)
-
-    # 5. Transaction Cost Analysis (TCA) Screening
-    final_orders = []
-    for order in validated_orders:
-        symbol = order['symbol']
-        notional = equity * order.get('target_weight', 0.01)
+class CoreEngineOrchestrator:
+    def __init__(self):
+        self.api_key = os.getenv("APCA_API_KEY_ID")
+        self.secret_key = os.getenv("APCA_API_SECRET_KEY")
         
-        passed, reason = exec_guard.validate_execution(symbol, notional, current_price=100.0)
-        if passed:
-            order['allocation'] = notional
-            final_orders.append(order)
-        else:
-            print(f"   🚫 Order blocked by Execution Guard for {symbol}: {reason}")
+        self.trading_client = TradingClient(self.api_key, self.secret_key, paper=True)
+        self.scanner = FullMarketScanner()
+        self.notifier = NotificationManager()
 
-    # 6. Execute Approved Orders
-    if final_orders:
-        print(f"\n🚀 [Execution Phase]: Routing {len(final_orders)} validated orders to broker...")
-        broker.execute_orders(final_orders)
-    else:
-        print("\n📭 [Execution Phase]: No orders cleared risk management and execution guards.")
+    def run(self):
+        self.notifier.send_alert("Core Engine Initialized", "Quantitative trading engine started successfully.", level="INFO")
+        logger.info("Core engine operational. Entering primary execution loop...")
 
-    # 7. Generate Live Human-Readable Journal (`trade_journal.md`)
-    JournalLogger.write_daily_journal(intel, raw_signals, validated_orders, final_orders, equity)
+        while True:
+            try:
+                # 1. Dynamically pull top market volume leaders (replaces hardcoded tickers)
+                active_universe = self.scanner.get_dynamic_trading_universe(top_n=5)
 
-    # 8. Log Performance JSON Snapshot
-    log_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "equity": equity,
-        "buying_power": buying_power,
-        "signals_generated": len(raw_signals),
-        "orders_executed": len(final_orders),
-        "executed_orders": final_orders
-    }
+                # 2. Iterate through the dynamic market universe to evaluate signals
+                for symbol in active_universe:
+                    logger.info(f"Evaluating multi-strategy signals for {symbol}...")
+                    
+                    # --- INSERT YOUR STRATEGY EVALUATION LOGIC HERE ---
+                    # if strategy_triggers_buy:
+                    #     self.execute_trade(symbol, OrderSide.BUY, qty=1)
 
-    log_file = "performance_log.json"
-    history = []
-    if os.path.exists(log_file):
-        try:
-            with open(log_file, "r") as f:
-                history = json.load(f)
-        except Exception:
-            history = []
+                # 3. Sleep cycle to respect API rate limits (200 requests/minute)
+                logger.info("Cycle complete. Sleeping for 300 seconds...")
+                time.sleep(300)
 
-    history.append(log_entry)
-    with open(log_file, "w") as f:
-        json.dump(history, f, indent=4)
-
-    print("\n✅ [QuantFund HQ]: Cycle completed successfully. Journal and logs updated.")
-    print("==================================================")
+            except Exception as e:
+                err_msg = f"Critical error in core engine loop: {str(e)}"
+                logger.error(err_msg)
+                self.notifier.send_alert("Loop Exception", err_msg, level="ERROR")
+                time.sleep(60)
 
 if __name__ == "__main__":
-    main()
+    engine = CoreEngineOrchestrator()
+    engine.run()

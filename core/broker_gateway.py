@@ -2,6 +2,8 @@ import os
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestQuoteRequest
 
 class BrokerGateway:
     def __init__(self):
@@ -16,6 +18,8 @@ class BrokerGateway:
             or os.getenv("ALPACA_SECRET")
         )
         self.client = TradingClient(self.api_key, self.secret_key, paper=True)
+        # Data client for real-time bid/ask quote fetching
+        self.data_client = StockHistoricalDataClient(self.api_key, self.secret_key)
 
     def get_account_status(self):
         try:
@@ -29,34 +33,49 @@ class BrokerGateway:
         """Returns a mapping of active positions and their sides."""
         try:
             positions = self.client.get_all_positions()
-            # Returns dictionary like {'MSFT': 'long', 'TSLA': 'short'}
             return {p.symbol: p.side for p in positions}
         except Exception as e:
             print(f"⚠️ [Broker Warning]: Could not fetch active positions: {e}")
             return {}
 
+    def get_live_price(self, symbol: str) -> float:
+        """Fetches the actual real-time price from Alpaca's data API."""
+        try:
+            request_params = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            quote = self.data_client.get_stock_latest_quote(request_params)
+            # Use Ask price for buys, Bid price for sells; fallback to ask price
+            ask_price = quote[symbol].ask_price
+            bid_price = quote[symbol].bid_price
+            if ask_price and ask_price > 0:
+                return float(ask_price)
+            elif bid_price and bid_price > 0:
+                return float(bid_price)
+        except Exception as e:
+            print(f"⚠️ [Price Fetch Warning] {symbol}: {e}. Falling back to order context price.")
+        return None
+
     def execute_orders(self, orders):
-        print(f"🚀 [Broker Gateway]: Executing {len(orders)} order(s) with full long/short support...")
+        print(f"🚀 [Broker Gateway]: Executing {len(orders)} order(s) with live price quotes...")
         active_positions = self.get_open_positions()
 
         for order in orders:
             symbol = order['symbol']
             signal_side = order['signal'] # 'BUY' or 'SELL'
             allocation = order.get('allocation', 100.0)
-            estimated_price = order.get('current_price', 100.0)
+
+            # Fetch real live market price from Alpaca Data API
+            live_price = self.get_live_price(symbol) or order.get('current_price', 100.0)
 
             try:
                 if signal_side == 'BUY':
                     side = OrderSide.BUY
-                    # Long Bracket Math: TP above price, SL below price
-                    tp_price = round(estimated_price * 1.03, 2)
-                    sl_price = round(estimated_price * 0.985, 2)
+                    # Long Bracket: TP 3% above live price, SL 1.5% below live price
+                    tp_price = round(live_price * 1.03, 2)
+                    sl_price = round(live_price * 0.985, 2)
                     action_label = "LONG BUY"
                 
                 elif signal_side == 'SELL':
-                    # Check if we are holding a long position to close, or opening a short position
                     if symbol in active_positions and active_positions[symbol] == 'long':
-                        # If we own it, a SELL signal means closing the long position (standard market order)
                         print(f"   🔄 [Position Close]: Closing existing long position in {symbol}.")
                         req = MarketOrderRequest(
                             symbol=symbol,
@@ -68,32 +87,28 @@ class BrokerGateway:
                         print(f"   ✅ [Close Order Submitted]: SELL {symbol} | Notional: ${allocation:,.2f}")
                         continue
                     else:
-                        # Otherwise, open a new SHORT position
                         side = OrderSide.SELL
-                        # Short Bracket Math: TP below price, SL above price
-                        tp_price = round(estimated_price * 0.97, 2)
-                        sl_price = round(estimated_price * 1.015, 2)
+                        # Short Bracket: TP 3% below live price, SL 1.5% above live price
+                        tp_price = round(live_price * 0.97, 2)
+                        sl_price = round(live_price * 1.015, 2)
                         action_label = "SHORT SELL"
                 else:
                     continue
 
-                # Configure server-side bracket legs
-                take_profit_req = TakeProfitRequest(limit_price=tp_price)
-                stop_loss_req = StopLossRequest(stop_price=sl_price)
-
+                # Server-side bracket request with accurate price targets
                 bracket_req = MarketOrderRequest(
                     symbol=symbol,
                     notional=allocation,
                     side=side,
                     time_in_force=TimeInForce.DAY,
                     order_class=OrderClass.BRACKET,
-                    take_profit=take_profit_req,
-                    stop_loss=stop_loss_req
+                    take_profit=TakeProfitRequest(limit_price=tp_price),
+                    stop_loss=StopLossRequest(stop_price=sl_price)
                 )
 
                 submitted = self.client.submit_order(bracket_req)
-                print(f"   ✅ [{action_label} Submitted]: {symbol} | Notional: ${allocation:,.2f}")
-                print(f"      └─ Guard Rails Set -> Take-Profit: ${tp_price} | Stop-Loss: ${sl_price}")
+                print(f"   ✅ [{action_label} Submitted]: {symbol} @ ~${live_price:.2f} | Notional: ${allocation:,.2f}")
+                print(f"      └─ Guard Rails -> Take-Profit: ${tp_price} | Stop-Loss: ${sl_price}")
 
             except Exception as e:
                 print(f"   ❌ [Order Rejection] {symbol} ({signal_side}): {e}")

@@ -3,7 +3,7 @@ name: QuantFund Multi-Strategy Engine
 on:
   schedule:
     # 1. Intraday Execution: Runs every hour during US market hours (14:00 - 21:00 UTC, Mon-Fri)
-    - cron: '15 14-21 * * 1-5'
+    - cron: '30 14-21 * * 1-5'
     # 2. Nightly Research Lab: Runs every weekday at 2:00 AM UTC (9:00 PM EST)
     - cron: '0 2 * * 1-5'
   workflow_dispatch:

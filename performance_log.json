@@ -54,5 +54,49 @@
                 "allocation": 15.0
             }
         ]
+    },
+    {
+        "timestamp": "2026-11-05T00:51:12.616175",
+        "equity": 1000.0,
+        "buying_power": 865.0,
+        "signals_generated": 5,
+        "orders_executed": 5,
+        "executed_orders": [
+            {
+                "symbol": "MSFT",
+                "signal": "BUY",
+                "strategy": "MarketNeutral-Factor",
+                "target_weight": 0.02,
+                "allocation": 20.0
+            },
+            {
+                "symbol": "GOOGL",
+                "signal": "SELL",
+                "strategy": "MarketNeutral-Factor",
+                "target_weight": 0.02,
+                "allocation": 20.0
+            },
+            {
+                "symbol": "TLT",
+                "signal": "BUY",
+                "strategy": "GlobalMacro-Rates",
+                "target_weight": 0.025,
+                "allocation": 25.0
+            },
+            {
+                "symbol": "SPY",
+                "signal": "SELL",
+                "strategy": "OptionsVol-MeanReversion",
+                "target_weight": 0.015,
+                "allocation": 15.0
+            },
+            {
+                "symbol": "QQQ",
+                "signal": "SELL",
+                "strategy": "OptionsVol-MeanReversion",
+                "target_weight": 0.015,
+                "allocation": 15.0
+            }
+        ]
     }
 ]

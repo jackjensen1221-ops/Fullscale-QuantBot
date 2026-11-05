@@ -19,7 +19,6 @@ class ResearchEngine:
             "volatility_state": self._analyze_volatility_regime()
         }
 
-        # Save research brief to disk for strategy desks to consume
         with open(self.intel_file, "w") as f:
             json.dump(intel, f, indent=4)
             
@@ -27,7 +26,6 @@ class ResearchEngine:
         return intel
 
     def _analyze_market_regime(self):
-        """Determines broader market trend (Risk-On vs Risk-Off) using SPY & TLT."""
         try:
             data = yf.download(["SPY", "TLT"], period="3mo", interval="1d", progress=False)['Close']
             if isinstance(data.columns, pd.MultiIndex):
@@ -48,7 +46,6 @@ class ResearchEngine:
             return {"regime": "NEUTRAL", "spy_20d_return": 0.0, "tlt_20d_return": 0.0}
 
     def _scan_volume_catalysts(self):
-        """Scans liquid tech/growth equities for abnormal pre-market/daily volume spikes."""
         watchlist = ["NVDA", "TSLA", "META", "AAPL", "MSFT", "AMZN", "NFLX"]
         catalysts = []
         
@@ -78,7 +75,6 @@ class ResearchEngine:
         return catalysts
 
     def _analyze_volatility_regime(self):
-        """Evaluates market volatility status using SPY realized volatility."""
         try:
             data = yf.download("SPY", period="1mo", interval="1d", progress=False)['Close']
             if isinstance(data, pd.DataFrame):
@@ -92,7 +88,3 @@ class ResearchEngine:
         except Exception as e:
             print(f"   ⚠️ Volatility regime error: {e}")
             return {"state": "NORMAL", "realized_vol": 0.15}
-
-if __name__ == "__main__":
-    engine = ResearchEngine()
-    engine.run_daily_research()

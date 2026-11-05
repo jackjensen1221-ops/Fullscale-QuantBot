@@ -61,7 +61,7 @@ class BrokerGateway:
         for order in orders:
             symbol = order['symbol']
             signal_side = order['signal'] # 'BUY' or 'SELL'
-            allocation = order.get('allocation', 100.0)
+            allocation = round(float(order.get('allocation', 100.0)), 2) # FIX: Force notional allocation to strictly 2 decimal places
 
             # Fetch real live market price from Alpaca Data API
             live_price = self.get_live_price(symbol) or order.get('current_price', 100.0)

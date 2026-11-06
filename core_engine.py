@@ -13,7 +13,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.enums import DataFeed
+from alpaca.data.enums import DataFeed  # Required for IEX free paper data feed
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ class CoreEngineOrchestrator:
         self.scanner = FullMarketScanner()
         self.notifier = NotificationManager()
 
-    def execute_trade_safe(self, symbol: symbol := "", side: OrderSide = OrderSide.BUY, qty: int = 1):
+    def execute_trade_safe(self, symbol: str, side: OrderSide, qty: int):
         """Executes market orders safely with error handling and Discord alerts."""
         try:
             order_request = MarketOrderRequest(
@@ -84,7 +84,7 @@ class CoreEngineOrchestrator:
                 # 1. Dynamically pull top market volume leaders
                 active_universe = self.scanner.get_dynamic_trading_universe(top_n=5)
 
-                # 2. Fetch historical bar data using the free IEX feed
+                # 2. Fetch historical bar data using the free IEX feed (safely outside the 15-minute window)
                 end_date = datetime.now() - timedelta(minutes=16)
                 start_date = end_date - timedelta(days=7)
 
@@ -93,35 +93,32 @@ class CoreEngineOrchestrator:
                     timeframe=TimeFrame.Day,
                     start=start_date,
                     end=end_date,
-                    feed=DataFeed.IEX
+                    feed=DataFeed.IEX  # Bypasses the paid SIP subscription error
                 )
                 bars_response = self.data_client.get_stock_bars(bars_request)
 
-                # Convert BarSet response into a clean multi-index DataFrame dictionary
-                bars_df = bars_response.df
+                # Access the underlying dictionary correctly from the BarSet object
+                bars_dict = bars_response.data
 
                 # 3. Iterate through universe and evaluate strategy criteria
                 for symbol in active_universe:
                     logger.info(f"Evaluating strategy metrics for {symbol}...")
                     
                     try:
-                        # Extract individual symbol slice from the DataFrame
-                        if symbol in bars_df.index.get_level_values(0):
-                            sym_df = bars_df.loc[symbol]
-                            
-                            if len(sym_df) >= 2:
-                                latest_close = sym_df.iloc[-1]['close']
-                                prev_close = sym_df.iloc[-2]['close']
+                        symbol_bars = bars_dict.get(symbol)
+                        if symbol_bars and len(symbol_bars) >= 2:
+                            latest_bar = symbol_bars[-1]
+                            prev_bar = symbol_bars[-2]
 
-                                # Momentum Rule: Buy if latest daily close exceeds previous close
-                                if latest_close > prev_close:
-                                    logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_close} > Prev: {prev_close})")
-                                    self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
-                                    break 
-                                else:
-                                    logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
+                            # Momentum Rule: Buy if latest daily close exceeds previous close
+                            if latest_bar.close > prev_bar.close:
+                                logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_bar.close} > Prev: {prev_bar.close})")
+                                self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
+                                break 
+                            else:
+                                logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
                         else:
-                            logger.warning(f"No bar data found for {symbol} in response.")
+                            logger.warning(f"Insufficient bar data found for {symbol}.")
                     except Exception as inner_e:
                         logger.error(f"Error processing symbol {symbol}: {inner_e}")
 

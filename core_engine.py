@@ -13,6 +13,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed  # <-- Required for free/paper IEX data feed
 
 load_dotenv()
 
@@ -83,15 +84,16 @@ class CoreEngineOrchestrator:
                 # 1. Dynamically pull top market volume leaders
                 active_universe = self.scanner.get_dynamic_trading_universe(top_n=5)
 
-                # 2. Fetch historical bar data to evaluate strategy rules
-                end_date = datetime.now()
+                # 2. Fetch historical bar data using the free IEX feed
+                end_date = datetime.now() - timedelta(minutes=16) # Avoid real-time block
                 start_date = end_date - timedelta(days=5)
 
                 bars_request = StockBarsRequest(
                     symbol_or_symbols=active_universe,
                     timeframe=TimeFrame.Day,
                     start=start_date,
-                    end=end_date
+                    end=end_date,
+                    feed=DataFeed.IEX  # <-- Fixes the subscription error on paper accounts
                 )
                 bars_response = self.data_client.get_stock_bars(bars_request)
 
@@ -104,15 +106,10 @@ class CoreEngineOrchestrator:
                         latest_bar = symbol_bars[-1]
                         prev_bar = symbol_bars[-2]
 
-                        # --- ACTIVE STRATEGY LOGIC ---
-                        # Example Momentum Rule: Buy if the latest daily close is higher than the previous close
+                        # Momentum Rule: Buy if latest daily close exceeds previous close
                         if latest_bar.close > prev_bar.close:
                             logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_bar.close} > Prev: {prev_bar.close})")
-                            
-                            # Execute a safe test buy order of 1 share
                             self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
-                            
-                            # Break after executing one order per cycle to manage exposure
                             break 
                         else:
                             logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")

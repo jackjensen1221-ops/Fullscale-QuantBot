@@ -133,10 +133,14 @@ class CoreEngineOrchestrator:
                             # Momentum Strategy Rule: Buy if latest daily close exceeds previous close
                             if latest_bar.close > prev_bar.close:
                                 logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_bar.close} > Prev: {prev_bar.close})")
-                                self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
                                 
-                                # Break after one successful execution per loop cycle to manage exposure
-                                break 
+                                # Check if position is already held to prevent duplicate order stacking
+                                try:
+                                    position = self.trading_client.get_open_position(symbol)
+                                    logger.info(f"Already holding an active position in {symbol}. Skipping order.")
+                                except Exception:
+                                    # No open position found; safe to execute trade
+                                    self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
                             else:
                                 logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
                         else:

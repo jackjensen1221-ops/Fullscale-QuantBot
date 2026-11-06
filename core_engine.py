@@ -13,7 +13,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.enums import DataFeed  # <-- Required for free/paper IEX data feed
+from alpaca.data.enums import DataFeed
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ class CoreEngineOrchestrator:
         self.scanner = FullMarketScanner()
         self.notifier = NotificationManager()
 
-    def execute_trade_safe(self, symbol: str, side: OrderSide, qty: int):
+    def execute_trade_safe(self, symbol: symbol := "", side: OrderSide = OrderSide.BUY, qty: int = 1):
         """Executes market orders safely with error handling and Discord alerts."""
         try:
             order_request = MarketOrderRequest(
@@ -85,34 +85,45 @@ class CoreEngineOrchestrator:
                 active_universe = self.scanner.get_dynamic_trading_universe(top_n=5)
 
                 # 2. Fetch historical bar data using the free IEX feed
-                end_date = datetime.now() - timedelta(minutes=16) # Avoid real-time block
-                start_date = end_date - timedelta(days=5)
+                end_date = datetime.now() - timedelta(minutes=16)
+                start_date = end_date - timedelta(days=7)
 
                 bars_request = StockBarsRequest(
                     symbol_or_symbols=active_universe,
                     timeframe=TimeFrame.Day,
                     start=start_date,
                     end=end_date,
-                    feed=DataFeed.IEX  # <-- Fixes the subscription error on paper accounts
+                    feed=DataFeed.IEX
                 )
                 bars_response = self.data_client.get_stock_bars(bars_request)
+
+                # Convert BarSet response into a clean multi-index DataFrame dictionary
+                bars_df = bars_response.df
 
                 # 3. Iterate through universe and evaluate strategy criteria
                 for symbol in active_universe:
                     logger.info(f"Evaluating strategy metrics for {symbol}...")
                     
-                    symbol_bars = bars_response.get(symbol)
-                    if symbol_bars and len(symbol_bars) >= 2:
-                        latest_bar = symbol_bars[-1]
-                        prev_bar = symbol_bars[-2]
+                    try:
+                        # Extract individual symbol slice from the DataFrame
+                        if symbol in bars_df.index.get_level_values(0):
+                            sym_df = bars_df.loc[symbol]
+                            
+                            if len(sym_df) >= 2:
+                                latest_close = sym_df.iloc[-1]['close']
+                                prev_close = sym_df.iloc[-2]['close']
 
-                        # Momentum Rule: Buy if latest daily close exceeds previous close
-                        if latest_bar.close > prev_bar.close:
-                            logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_bar.close} > Prev: {prev_bar.close})")
-                            self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
-                            break 
+                                # Momentum Rule: Buy if latest daily close exceeds previous close
+                                if latest_close > prev_close:
+                                    logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_close} > Prev: {prev_close})")
+                                    self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
+                                    break 
+                                else:
+                                    logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
                         else:
-                            logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
+                            logger.warning(f"No bar data found for {symbol} in response.")
+                    except Exception as inner_e:
+                        logger.error(f"Error processing symbol {symbol}: {inner_e}")
 
                 # 4. Sleep cycle before next check
                 logger.info("Cycle complete. Sleeping for 300 seconds...")

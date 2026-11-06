@@ -2,14 +2,17 @@ import os
 import time
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Import your custom modules based on your folder structure
+# Import your custom modules
 from strategies.market_scanner import FullMarketScanner
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 load_dotenv()
 
@@ -48,8 +51,28 @@ class CoreEngineOrchestrator:
         self.secret_key = os.getenv("APCA_API_SECRET_KEY")
         
         self.trading_client = TradingClient(self.api_key, self.secret_key, paper=True)
+        self.data_client = StockHistoricalDataClient(self.api_key, self.secret_key)
         self.scanner = FullMarketScanner()
         self.notifier = NotificationManager()
+
+    def execute_trade_safe(self, symbol: str, side: OrderSide, qty: int):
+        """Executes market orders safely with error handling and Discord alerts."""
+        try:
+            order_request = MarketOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=TimeInForce.DAY,
+                order_class=OrderClass.SIMPLE
+            )
+            order = self.trading_client.submit_order(order_request)
+            msg = f"Successfully placed `{side.value}` order for **{qty} shares** of **{symbol}**."
+            logger.info(msg)
+            self.notifier.send_alert("Order Executed", msg, level="SUCCESS")
+        except Exception as e:
+            err_msg = f"Failed to submit `{side.value}` order for {symbol}: {str(e)}"
+            logger.error(err_msg)
+            self.notifier.send_alert("Execution Failure", err_msg, level="ERROR")
 
     def run(self):
         self.notifier.send_alert("Core Engine Initialized", "Quantitative trading engine started successfully.", level="INFO")
@@ -57,18 +80,44 @@ class CoreEngineOrchestrator:
 
         while True:
             try:
-                # 1. Dynamically pull top market volume leaders (replaces hardcoded tickers)
+                # 1. Dynamically pull top market volume leaders
                 active_universe = self.scanner.get_dynamic_trading_universe(top_n=5)
 
-                # 2. Iterate through the dynamic market universe to evaluate signals
-                for symbol in active_universe:
-                    logger.info(f"Evaluating multi-strategy signals for {symbol}...")
-                    
-                    # --- INSERT YOUR STRATEGY EVALUATION LOGIC HERE ---
-                    # if strategy_triggers_buy:
-                    #     self.execute_trade(symbol, OrderSide.BUY, qty=1)
+                # 2. Fetch historical bar data to evaluate strategy rules
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=5)
 
-                # 3. Sleep cycle to respect API rate limits (200 requests/minute)
+                bars_request = StockBarsRequest(
+                    symbol_or_symbols=active_universe,
+                    timeframe=TimeFrame.Day,
+                    start=start_date,
+                    end=end_date
+                )
+                bars_response = self.data_client.get_stock_bars(bars_request)
+
+                # 3. Iterate through universe and evaluate strategy criteria
+                for symbol in active_universe:
+                    logger.info(f"Evaluating strategy metrics for {symbol}...")
+                    
+                    symbol_bars = bars_response.get(symbol)
+                    if symbol_bars and len(symbol_bars) >= 2:
+                        latest_bar = symbol_bars[-1]
+                        prev_bar = symbol_bars[-2]
+
+                        # --- ACTIVE STRATEGY LOGIC ---
+                        # Example Momentum Rule: Buy if the latest daily close is higher than the previous close
+                        if latest_bar.close > prev_bar.close:
+                            logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_bar.close} > Prev: {prev_bar.close})")
+                            
+                            # Execute a safe test buy order of 1 share
+                            self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
+                            
+                            # Break after executing one order per cycle to manage exposure
+                            break 
+                        else:
+                            logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
+
+                # 4. Sleep cycle before next check
                 logger.info("Cycle complete. Sleeping for 300 seconds...")
                 time.sleep(300)
 

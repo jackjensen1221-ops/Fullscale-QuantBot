@@ -5,7 +5,7 @@ import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Import your custom modules
+# Import custom modules & Alpaca SDK components
 from strategies.market_scanner import FullMarketScanner
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -13,26 +13,38 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.enums import DataFeed  # Required for IEX free paper data feed
+from alpaca.data.enums import DataFeed
 
+# Load local environment variables from .env
 load_dotenv()
 
+# Configure logging to write both to a local file and console output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("trading_bot.log"), logging.StreamHandler()]
+    handlers=[
+        logging.FileHandler("trading_bot.log"),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger("CoreEngine")
 
 class NotificationManager:
-    """Handles real-time Discord webhook notifications."""
+    """Handles real-time Discord webhook notifications with rich color-coded embeds."""
     def __init__(self):
         self.webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
 
     def send_alert(self, title: str, message: str, level: str = "INFO"):
         if not self.webhook_url:
             return
-        color_map = {"SUCCESS": 3066993, "ERROR": 15158332, "WARNING": 16776960, "INFO": 3447003}
+        
+        color_map = {
+            "SUCCESS": 3066993,   # Green
+            "ERROR": 15158332,    # Red
+            "WARNING": 16776960,  # Yellow
+            "INFO": 3447003       # Blue
+        }
+        
         payload = {
             "embeds": [{
                 "title": f"[{level.upper()}] {title}",
@@ -41,23 +53,30 @@ class NotificationManager:
                 "timestamp": datetime.utcnow().isoformat()
             }]
         }
+        
         try:
             requests.post(self.webhook_url, json=payload, timeout=5)
         except Exception as e:
-            logger.error(f"Failed to send webhook alert: {e}")
+            logger.error(f"Failed to dispatch Discord webhook alert: {e}")
 
 class CoreEngineOrchestrator:
+    """Main automated trading engine orchestrating scanners, data feeds, strategies, and execution."""
     def __init__(self):
         self.api_key = os.getenv("APCA_API_KEY_ID")
         self.secret_key = os.getenv("APCA_API_SECRET_KEY")
         
+        if not self.api_key or not self.secret_key:
+            logger.error("Alpaca API credentials missing. Check your environment variables or .env file.")
+
+        # Initialize Alpaca clients (Paper trading mode active)
         self.trading_client = TradingClient(self.api_key, self.secret_key, paper=True)
         self.data_client = StockHistoricalDataClient(self.api_key, self.secret_key)
+        
         self.scanner = FullMarketScanner()
         self.notifier = NotificationManager()
 
     def execute_trade_safe(self, symbol: str, side: OrderSide, qty: int):
-        """Executes market orders safely with error handling and Discord alerts."""
+        """Submits market orders securely with exception handling and Discord notifications."""
         try:
             order_request = MarketOrderRequest(
                 symbol=symbol,
@@ -67,7 +86,7 @@ class CoreEngineOrchestrator:
                 order_class=OrderClass.SIMPLE
             )
             order = self.trading_client.submit_order(order_request)
-            msg = f"Successfully placed `{side.value}` order for **{qty} shares** of **{symbol}**."
+            msg = f"Successfully placed `{side.value}` order for **{qty} share(s)** of **{symbol}**."
             logger.info(msg)
             self.notifier.send_alert("Order Executed", msg, level="SUCCESS")
         except Exception as e:
@@ -81,26 +100,27 @@ class CoreEngineOrchestrator:
 
         while True:
             try:
-                # 1. Dynamically pull top market volume leaders
+                # 1. Dynamically scan and pull top market volume leaders
                 active_universe = self.scanner.get_dynamic_trading_universe(top_n=5)
 
-                # 2. Fetch historical bar data using the free IEX feed (safely outside the 15-minute window)
+                # 2. Define historical query window (skipping the last 16 mins to prevent free-tier SIP restrictions)
                 end_date = datetime.now() - timedelta(minutes=16)
                 start_date = end_date - timedelta(days=7)
 
+                # 3. Request historical bar data using the free IEX feed
                 bars_request = StockBarsRequest(
                     symbol_or_symbols=active_universe,
                     timeframe=TimeFrame.Day,
                     start=start_date,
                     end=end_date,
-                    feed=DataFeed.IEX  # Bypasses the paid SIP subscription error
+                    feed=DataFeed.IEX
                 )
                 bars_response = self.data_client.get_stock_bars(bars_request)
 
-                # Access the underlying dictionary correctly from the BarSet object
+                # Safely extract dictionary mapping from the BarSet object
                 bars_dict = bars_response.data
 
-                # 3. Iterate through universe and evaluate strategy criteria
+                # 4. Iterate through universe and evaluate strategy criteria
                 for symbol in active_universe:
                     logger.info(f"Evaluating strategy metrics for {symbol}...")
                     
@@ -110,10 +130,12 @@ class CoreEngineOrchestrator:
                             latest_bar = symbol_bars[-1]
                             prev_bar = symbol_bars[-2]
 
-                            # Momentum Rule: Buy if latest daily close exceeds previous close
+                            # Momentum Strategy Rule: Buy if latest daily close exceeds previous close
                             if latest_bar.close > prev_bar.close:
                                 logger.info(f"Bullish momentum confirmed for {symbol} (Close: {latest_bar.close} > Prev: {prev_bar.close})")
                                 self.execute_trade_safe(symbol, OrderSide.BUY, qty=1)
+                                
+                                # Break after one successful execution per loop cycle to manage exposure
                                 break 
                             else:
                                 logger.info(f"No signal for {symbol}. Close did not exceed previous bar.")
@@ -122,7 +144,7 @@ class CoreEngineOrchestrator:
                     except Exception as inner_e:
                         logger.error(f"Error processing symbol {symbol}: {inner_e}")
 
-                # 4. Sleep cycle before next check
+                # 5. Sleep cycle before initiating the next check (respecting rate limits)
                 logger.info("Cycle complete. Sleeping for 300 seconds...")
                 time.sleep(300)
 
